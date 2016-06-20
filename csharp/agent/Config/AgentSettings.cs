@@ -223,10 +223,11 @@ namespace Health.Direct.Agent.Config
             ITrustAnchorResolver trustAnchors = this.Anchors.Resolver.CreateResolver();
             TrustModel trustModel = (this.Trust != null) ? this.Trust.CreateTrustModel() : TrustModel.Default;
             SMIMECryptographer cryptographer = this.Cryptographer.Create();
+			ICertificateFilter certificateFilter = new NoopCertificateFilter();
 
             IDomainResolver domainResolver = this.CreateResolver();
             
-            DirectAgent agent = new DirectAgent(domainResolver, privateCerts, publicCerts, trustAnchors, trustModel, cryptographer);
+            DirectAgent agent = new DirectAgent(domainResolver, privateCerts, publicCerts, trustAnchors, trustModel, cryptographer, certificateFilter);
             agent.AllowNonWrappedIncoming = m_allowNonWrappedIncoming;
             agent.WrapMessages = m_wrapOutgoing;
             

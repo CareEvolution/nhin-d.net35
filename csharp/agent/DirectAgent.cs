@@ -62,6 +62,7 @@ namespace Health.Direct.Agent
     ///  
     public class DirectAgent
     {
+		ICertificateFilter m_certificateFilter;
         SMIMECryptographer m_cryptographer;
         ICertificateResolver m_privateCertResolver;
         ICertificateResolver m_publicCertResolver;
@@ -76,19 +77,24 @@ namespace Health.Direct.Agent
         bool m_wrappingEnabled = true;
         bool m_allowNonWrappedIncoming = true;
 
-        /// <summary> 
-        /// Creates a DirectAgent instance using local certificate stores and the standard trust and cryptography models. 
-        /// </summary> 
-        /// <param name="domain"> 
-        /// The local domain name managed by this agent. 
-        /// </param> 
-        public DirectAgent(string domain)
+		/// <summary> 
+		/// Creates a DirectAgent instance using local certificate stores and the standard trust and cryptography models. 
+		/// </summary> 
+		/// <param name="domain"> 
+		/// The local domain name managed by this agent. 
+		/// </param> 
+		public DirectAgent(string domain)
             : this(new StaticDomainResolver(domain), SystemX509Store.OpenPrivate().CreateResolver(), 
                    SystemX509Store.OpenExternal().CreateResolver(),
                    TrustAnchorResolver.CreateDefault())
         {
         }
-		
+
+		public DirectAgent(string domain, ICertificateResolver privateCerts, ICertificateResolver publicCerts, ITrustAnchorResolver anchors, ICertificateFilter certificateFilter )
+            : this(new StaticDomainResolver(domain), privateCerts, publicCerts, anchors, TrustModel.Default, SMIMECryptographer.Default, certificateFilter )
+        {
+        }	
+
         /// <summary>
         /// Creates a DirectAgent instance, specifying private, external and trust anchor certificate stores, and
         /// and defaulting to the standard trust and cryptography models.
@@ -108,7 +114,7 @@ namespace Health.Direct.Agent
         /// An <see cref="ITrustAnchorResolver"/> instance providing trust anchors.
         /// </param>
         public DirectAgent(string domain, ICertificateResolver privateCerts, ICertificateResolver publicCerts, ITrustAnchorResolver anchors)
-            : this(new StaticDomainResolver(domain), privateCerts, publicCerts, anchors, TrustModel.Default, SMIMECryptographer.Default)
+            : this(new StaticDomainResolver(domain), privateCerts, publicCerts, anchors, TrustModel.Default, SMIMECryptographer.Default, new NoopCertificateFilter() )
         {
         }
 
@@ -131,37 +137,40 @@ namespace Health.Direct.Agent
         /// An <see cref="ITrustAnchorResolver"/> instance providing trust anchors.
         /// </param>
         public DirectAgent(IDomainResolver domainResolver, ICertificateResolver privateCerts, ICertificateResolver publicCerts, ITrustAnchorResolver anchors)
-            : this(domainResolver, privateCerts, publicCerts, anchors, TrustModel.Default, SMIMECryptographer.Default)
+            : this(domainResolver, privateCerts, publicCerts, anchors, TrustModel.Default, SMIMECryptographer.Default, new NoopCertificateFilter() )
         {
         }
 
-        
+		public DirectAgent( IDomainResolver domainResolver, ICertificateResolver privateCerts, ICertificateResolver publicCerts, ITrustAnchorResolver anchors, ICertificateFilter certificateFilter )
+			: this( domainResolver, privateCerts, publicCerts, anchors, TrustModel.Default, SMIMECryptographer.Default, certificateFilter )
+		{
+		}
 
-        /// <summary>
-        /// Creates a DirectAgent instance, specifying private, external and trust anchor certificate stores, and 
-        /// trust and cryptography models.
-        /// </summary>
-        /// <param name="domainResolver">
-        /// An <see cref="IDomainResolver"/> instance providing array of local domain name managed by this agent.
-        /// </param>
-        /// <param name="privateCerts">
-        /// An <see cref="ICertificateResolver"/> instance providing private certificates
-        /// for senders of outgoing messages and receivers of incoming messages.
-        /// </param>
-        /// <param name="publicCerts">
-        /// An <see cref="ICertificateResolver"/> instance providing public certificates 
-        /// for receivers of outgoing messages and senders of incoming messages. 
-        /// </param>
-        /// <param name="anchors">
-        /// An <see cref="ITrustAnchorResolver"/> instance providing trust anchors.
-        /// </param>
-        /// <param name="trustModel">
-        /// An instance or subclass of <see cref="SMIMECryptographer"/> providing a custom trust model.
-        /// </param>
-        /// <param name="cryptographer">
-        /// An instance or subclass of <see cref="Health.Direct.Agent"/> providing a custom cryptography model.
-        /// </param>
-        public DirectAgent(IDomainResolver domainResolver, ICertificateResolver privateCerts, ICertificateResolver publicCerts, ITrustAnchorResolver anchors, TrustModel trustModel, SMIMECryptographer cryptographer)
+		/// <summary>
+		/// Creates a DirectAgent instance, specifying private, external and trust anchor certificate stores, and 
+		/// trust and cryptography models.
+		/// </summary>
+		/// <param name="domainResolver">
+		/// An <see cref="IDomainResolver"/> instance providing array of local domain name managed by this agent.
+		/// </param>
+		/// <param name="privateCerts">
+		/// An <see cref="ICertificateResolver"/> instance providing private certificates
+		/// for senders of outgoing messages and receivers of incoming messages.
+		/// </param>
+		/// <param name="publicCerts">
+		/// An <see cref="ICertificateResolver"/> instance providing public certificates 
+		/// for receivers of outgoing messages and senders of incoming messages. 
+		/// </param>
+		/// <param name="anchors">
+		/// An <see cref="ITrustAnchorResolver"/> instance providing trust anchors.
+		/// </param>
+		/// <param name="trustModel">
+		/// An instance or subclass of <see cref="SMIMECryptographer"/> providing a custom trust model.
+		/// </param>
+		/// <param name="cryptographer">
+		/// An instance or subclass of <see cref="Health.Direct.Agent"/> providing a custom cryptography model.
+		/// </param>
+		public DirectAgent(IDomainResolver domainResolver, ICertificateResolver privateCerts, ICertificateResolver publicCerts, ITrustAnchorResolver anchors, TrustModel trustModel, SMIMECryptographer cryptographer, ICertificateFilter certificateFilter )
         {
             m_managedDomains = new AgentDomains(domainResolver);
 
@@ -185,7 +194,12 @@ namespace Health.Direct.Agent
             {
                 throw new ArgumentNullException("cryptographer");
             }
+			if( certificateFilter == null )
+			{
+				throw new ArgumentNullException("certificateFilter");
+			}
 
+			m_certificateFilter = certificateFilter;
             m_privateCertResolver = privateCerts;
             m_publicCertResolver = publicCerts;
             m_cryptographer = cryptographer;
@@ -907,14 +921,16 @@ namespace Health.Direct.Agent
         //
         void SignAndEncryptMessage(OutgoingMessage message)
         {
-            SignedEntity signedEntity = m_cryptographer.Sign(message.Message, message.Sender.Certificates);
+			var signingCertificates = m_certificateFilter.FilterSigningCertificates( message.Sender.Certificates );
+            SignedEntity signedEntity = m_cryptographer.Sign(message.Message, signingCertificates );
 
             if (m_encryptionEnabled)
             {
-                //
-                // Encrypt the outbound message with all known trusted certs
-                //
-                MimeEntity encryptedEntity = m_cryptographer.Encrypt(signedEntity, message.Recipients.GetCertificates());
+				//
+				// Encrypt the outbound message with all known trusted certs
+				//
+				var encryptingCertificates = m_certificateFilter.FilterEncryptionCertificates( message.Recipients.GetCertificates() );
+				MimeEntity encryptedEntity = m_cryptographer.Encrypt( signedEntity, encryptingCertificates ); 
                 //
                 // Alter message content to contain encrypted data
                 //
