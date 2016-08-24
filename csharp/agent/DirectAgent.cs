@@ -619,7 +619,7 @@ namespace Health.Direct.Agent
         {
             signatures = null;
             payload = null;
-            foreach (X509Certificate2 cert in recipient.Certificates)
+            foreach (X509Certificate2 cert in m_certificateFilter.FilterEncryptionCertificates(recipient.Certificates))
             {
                 try
                 {
